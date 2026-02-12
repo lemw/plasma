@@ -2,4 +2,4 @@
 # It will auto-run chase_web.py on every boot/reset.
 # Make sure chase_web.py and secrets.py are also on the board.
 
-import chase_web
+import examples.plasma2350w.chase_web as chase_web
