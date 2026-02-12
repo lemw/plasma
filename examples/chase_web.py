@@ -22,6 +22,10 @@ speed = 50        # 1 (slow) to 100 (fast)
 color_r = 255     # current chase colour
 color_g = 0
 color_b = 0
+remember = False  # paint mode: LEDs keep their colour
+
+# Store painted colour for each LED (used in paint mode)
+painted = [(0, 0, 0)] * NUM_LEDS
 
 # --- LED strip setup ---
 led_strip = plasma.WS2812(NUM_LEDS, color_order=plasma.COLOR_ORDER_BGR)
@@ -77,28 +81,57 @@ def wifi_connect():
 # Chase animation (async)
 # ---------------------------------------------------------------------------
 async def chase_loop():
-    """Single chaser with fading trail."""
-    global speed, color_r, color_g, color_b
+    """Single chaser with fading trail. In paint mode, LEDs keep their colour."""
+    global speed, color_r, color_g, color_b, remember, painted
     offset = 0
+    DIM = 0.4  # painted LEDs shown at 40% so the chaser head is visible
 
     while True:
-        # Clear all LEDs
-        for i in range(NUM_LEDS):
-            led_strip.set_rgb(i, 0, 0, 0)
-
         head = offset % NUM_LEDS
-        led_strip.set_rgb(head, color_r, color_g, color_b)
 
-        for t in range(1, TRAIL_LENGTH + 1):
-            trail_idx = (head - t) % NUM_LEDS
-            fade = 1.0 - (t / (TRAIL_LENGTH + 1))
-            tr = int(color_r * fade * fade)
-            tg = int(color_g * fade * fade)
-            tb = int(color_b * fade * fade)
-            led_strip.set_rgb(trail_idx, tr, tg, tb)
+        if remember:
+            # Paint mode: stamp current colour onto this LED
+            painted[head] = (color_r, color_g, color_b)
+
+            # Show all painted LEDs at reduced brightness
+            for i in range(NUM_LEDS):
+                pr, pg, pb = painted[i]
+                led_strip.set_rgb(i, int(pr * DIM), int(pg * DIM), int(pb * DIM))
+
+            # Chaser head at full brightness
+            led_strip.set_rgb(head, color_r, color_g, color_b)
+
+            # Fading trail
+            for t in range(1, TRAIL_LENGTH + 1):
+                trail_idx = (head - t) % NUM_LEDS
+                fade = 1.0 - (t / (TRAIL_LENGTH + 1))
+                pr, pg, pb = painted[trail_idx]
+                # Trail blends from full chase colour down to painted colour
+                tr = max(int(pr * DIM), int(color_r * fade * fade))
+                tg = max(int(pg * DIM), int(color_g * fade * fade))
+                tb = max(int(pb * DIM), int(color_b * fade * fade))
+                led_strip.set_rgb(trail_idx, tr, tg, tb)
+        else:
+            # Normal mode: clear all, show chaser only
+            for i in range(NUM_LEDS):
+                led_strip.set_rgb(i, 0, 0, 0)
+
+            led_strip.set_rgb(head, color_r, color_g, color_b)
+
+            for t in range(1, TRAIL_LENGTH + 1):
+                trail_idx = (head - t) % NUM_LEDS
+                fade = 1.0 - (t / (TRAIL_LENGTH + 1))
+                tr = int(color_r * fade * fade)
+                tg = int(color_g * fade * fade)
+                tb = int(color_b * fade * fade)
+                led_strip.set_rgb(trail_idx, tr, tg, tb)
+
+        # Speed 0 = paused, 1-100 maps ~200ms down to ~10ms
+        if speed == 0:
+            await uasyncio.sleep(0.1)
+            continue
 
         offset = (offset + 1) % NUM_LEDS
-
         delay = max(0.01, 0.21 - (speed * 0.002))
         await uasyncio.sleep(delay)
 
@@ -176,8 +209,13 @@ Connection: close\r
   <input type="color" id="color" value="{hex_color}">
 
   <label for="speed">Speed</label>
-  <input type="range" id="speed" min="1" max="100" value="{speed}">
+  <input type="range" id="speed" min="0" max="100" value="{speed}">
   <div class="val" id="sval">{speed}</div>
+
+  <label style="display:flex;align-items:center;gap:.6em;margin-top:1.2em;cursor:pointer">
+    <input type="checkbox" id="remember" {"checked" if remember else ""}  style="width:22px;height:22px;accent-color:#e94560">
+    <span>Remember (paint mode)</span>
+  </label>
 </div>
 
 <script>
@@ -195,6 +233,9 @@ Connection: close\r
     sval.textContent = e.target.value;
     send('speed=' + e.target.value);
   }});
+  document.getElementById('remember').addEventListener('change', e => {{
+    send('remember=' + (e.target.checked ? '1' : '0'));
+  }});
 </script>
 </body>
 </html>"""
@@ -205,7 +246,7 @@ Connection: close\r
 # ---------------------------------------------------------------------------
 def parse_request(raw):
     """Extract query parameters from a raw HTTP request."""
-    global speed, color_r, color_g, color_b
+    global speed, color_r, color_g, color_b, remember, painted
 
     try:
         line = raw.split(b"\r\n")[0].decode()
@@ -215,12 +256,18 @@ def parse_request(raw):
         for param in query.split("&"):
             key, val = param.split("=")
             if key == "speed":
-                speed = max(1, min(100, int(val)))
+                speed = max(0, min(100, int(val)))
             elif key == "color":
                 hex_str = val.strip("#")
                 color_r = int(hex_str[0:2], 16)
                 color_g = int(hex_str[2:4], 16)
                 color_b = int(hex_str[4:6], 16)
+            elif key == "remember":
+                remember = val == "1"
+                if not remember:
+                    # Clear the painted canvas
+                    painted = [(0, 0, 0)] * NUM_LEDS
+        # Auto-save removed — remember now means paint mode
     except Exception as e:
         print("Parse error:", e)
 
