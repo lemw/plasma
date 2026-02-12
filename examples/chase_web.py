@@ -1,10 +1,9 @@
 """
 LED Chase Animation with WiFi Web Control
-for Pimoroni Plasma 2350W + 50 LED WS2812 strip.
+for Pimoroni Plasma 2350W + WS2812 LED strip.
 
 A single LED chases around the strip with a fading trail.
 Speed and colour are controllable from a web browser.
-LED animation runs on core 1, web server on core 0 (main thread).
 
 Upload this file + secrets.py to the board and run it.
 """
@@ -13,9 +12,9 @@ import time
 import plasma
 import network
 import socket
-import _thread
+import uasyncio
 
-NUM_LEDS = 50
+NUM_LEDS = 60
 TRAIL_LENGTH = 4  # number of fading trail LEDs behind each head
 
 # --- Global state (modified by web requests) ---
@@ -37,13 +36,16 @@ def wifi_connect():
     from secrets import WIFI_SSID, WIFI_PASSWORD
 
     wlan = network.WLAN(network.STA_IF)
-    wlan.active(True)
 
-    # If already connected (e.g. after soft reboot), skip
-    if wlan.isconnected():
-        ip = wlan.ifconfig()[0]
-        print(f"Already connected! Open http://{ip} in your browser")
-        return ip
+    # Always start fresh — stale state after soft reboot can look "connected"
+    wlan.disconnect()
+    wlan.active(False)
+    time.sleep(1)
+    wlan.active(True)
+    time.sleep(1)
+
+    # Disable WiFi power saving — fixes CYW43 ioctl timeouts
+    wlan.config(pm=0xa11140)
 
     print(f"Connecting to {WIFI_SSID}...")
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
@@ -51,28 +53,31 @@ def wifi_connect():
     max_wait = 30
     while max_wait > 0:
         status = wlan.status()
-        if wlan.isconnected():
+        if status == 3:
             break
-        if status in (-1, -2, -3):
+        if status < 0:
             print(f"WiFi failed with status: {status}")
             break
         print(f"  waiting... (status={status})")
         time.sleep(1)
         max_wait -= 1
 
-    if not wlan.isconnected():
-        raise RuntimeError(f"WiFi connection failed (status={wlan.status()})")
+    if status != 3:
+        raise RuntimeError(f"WiFi connection failed (status={status})")
+
+    time.sleep(2)
 
     ip = wlan.ifconfig()[0]
-    print(f"Connected! Open http://{ip} in your browser")
+    print(f"Connected! IP: {ip}")
+    print(f"Open http://{ip} in your browser")
     return ip
 
 
 # ---------------------------------------------------------------------------
-# Chase animation (runs on second core via _thread)
+# Chase animation (async)
 # ---------------------------------------------------------------------------
-def chase_loop():
-    """Single chaser with fading trail — runs forever on core 1."""
+async def chase_loop():
+    """Single chaser with fading trail."""
     global speed, color_r, color_g, color_b
     offset = 0
 
@@ -82,11 +87,8 @@ def chase_loop():
             led_strip.set_rgb(i, 0, 0, 0)
 
         head = offset % NUM_LEDS
-
-        # Head LED at full brightness
         led_strip.set_rgb(head, color_r, color_g, color_b)
 
-        # Fading trail behind the head
         for t in range(1, TRAIL_LENGTH + 1):
             trail_idx = (head - t) % NUM_LEDS
             fade = 1.0 - (t / (TRAIL_LENGTH + 1))
@@ -97,9 +99,8 @@ def chase_loop():
 
         offset = (offset + 1) % NUM_LEDS
 
-        # Speed maps 1-100 → ~200ms down to ~10ms delay
         delay = max(0.01, 0.21 - (speed * 0.002))
-        time.sleep(delay)
+        await uasyncio.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -225,45 +226,58 @@ def parse_request(raw):
 
 
 # ---------------------------------------------------------------------------
-# Web server (runs on main thread / core 0)
+# Web server (async, non-blocking)
 # ---------------------------------------------------------------------------
-def web_server():
-    """Blocking HTTP server on port 80."""
-    addr = socket.getaddrinfo("0.0.0.0", 80)[0][-1]
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(addr)
-    s.listen(2)
+async def web_server():
+    """Async HTTP server on port 80 using uasyncio stream API."""
 
-    print("Web server listening on port 80")
+    async def handle_client(reader, writer):
+        peer = writer.get_extra_info("peername")
+        print(f"[WEB] Client connected from {peer}")
+        try:
+            request = await reader.read(1024)
+            req_line = request.split(b"\r\n")[0].decode() if request else "(empty)"
+            print(f"[WEB] Request: {req_line}")
+            parse_request(request)
+            response = build_page()
+            writer.write(response)
+            await writer.drain()
+            print(f"[WEB] Response sent ({len(response)} bytes)")
+        except Exception as e:
+            print(f"[WEB] Client error: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            print(f"[WEB] Connection closed")
+
+    server = await uasyncio.start_server(handle_client, "0.0.0.0", 80)
+    print("[WEB] Web server listening on port 80")
+
+    # Verify WiFi is still up
+    wlan = network.WLAN(network.STA_IF)
+    print(f"[WEB] WiFi connected: {wlan.isconnected()}")
+    print(f"[WEB] IP config: {wlan.ifconfig()}")
 
     while True:
-        try:
-            cl, remote = s.accept()
-            cl.settimeout(2)
-            request = cl.recv(1024)
-            parse_request(request)
-            cl.send(build_page())
-        except Exception as e:
-            print("Client error:", e)
-        finally:
-            try:
-                cl.close()
-            except Exception:
-                pass
+        # Periodic WiFi health check
+        if not wlan.isconnected():
+            print("[WEB] WARNING: WiFi disconnected!")
+        await uasyncio.sleep(10)
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+async def main():
+    await uasyncio.gather(
+        chase_loop(),
+        web_server(),
+    )
+
+
 ip = wifi_connect()
-
-# Start LED animation on the second core
-_thread.start_new_thread(chase_loop, ())
-
-# Run web server on main thread (keeps REPL responsive to Ctrl+C)
 try:
-    web_server()
+    uasyncio.run(main())
 except KeyboardInterrupt:
     pass
 finally:
