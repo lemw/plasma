@@ -46,6 +46,9 @@ button_a = Pin(12, Pin.IN, Pin.PULL_UP)
 # Store painted colour for each LED (used in paint mode)
 painted = [(0, 0, 0)] * NUM_LEDS
 
+# Web-traffic flicker: when >0, onboard LED flickers instead of mimicking
+web_traffic_until = 0  # ticks_ms deadline
+
 # --- LED strip setup ---
 led_strip = plasma.WS2812(NUM_LEDS, color_order=plasma.COLOR_ORDER_BGR)
 led_strip.start()
@@ -58,12 +61,33 @@ onboard_g = PWM(Pin(17), freq=1000, duty_u16=65535)
 onboard_b = PWM(Pin(18), freq=1000, duty_u16=65535)
 
 
+def set_onboard(r, g, b, brightness=ONBOARD_DIM):
+    """Set onboard LED to an RGB colour at given brightness (0-1)."""
+    # Active-low: duty 65535 = off, 0 = full on
+    onboard_r.duty_u16(65535 - int(r * brightness * 257))
+    onboard_g.duty_u16(65535 - int(g * brightness * 257))
+    onboard_b.duty_u16(65535 - int(b * brightness * 257))
+
+
+def onboard_off():
+    """Turn onboard LED fully off."""
+    onboard_r.duty_u16(65535)
+    onboard_g.duty_u16(65535)
+    onboard_b.duty_u16(65535)
+
+
 def update_onboard_led():
-    """Set onboard LED to current chase colour at reduced intensity."""
-    # Active-low: duty = 65535 means off, 0 means full on
-    onboard_r.duty_u16(65535 - int(color_r * ONBOARD_DIM * 257))
-    onboard_g.duty_u16(65535 - int(color_g * ONBOARD_DIM * 257))
-    onboard_b.duty_u16(65535 - int(color_b * ONBOARD_DIM * 257))
+    """Set onboard LED: flicker on web traffic, else mimic chase colour."""
+    global web_traffic_until
+    now = time.ticks_ms()
+    if time.ticks_diff(web_traffic_until, now) > 0:
+        # Traffic flicker: rapidly toggle between white and off
+        if (now // 60) % 2:
+            set_onboard(255, 255, 255, 0.25)
+        else:
+            onboard_off()
+    else:
+        set_onboard(color_r, color_g, color_b)
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +112,8 @@ def wifi_connect():
     print(f"Connecting to {WIFI_SSID}...")
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
 
+    # Blink red while waiting for connection
+    blink_on = True
     max_wait = 30
     while max_wait > 0:
         status = wlan.status()
@@ -96,13 +122,22 @@ def wifi_connect():
         if status < 0:
             print(f"WiFi failed with status: {status}")
             break
+        # Blink the onboard LED red
+        if blink_on:
+            set_onboard(255, 0, 0, 0.3)
+        else:
+            onboard_off()
+        blink_on = not blink_on
         print(f"  waiting... (status={status})")
         time.sleep(1)
         max_wait -= 1
 
     if status != 3:
+        onboard_off()
         raise RuntimeError(f"WiFi connection failed (status={status})")
 
+    # Connected — show green
+    set_onboard(0, 255, 0, 0.3)
     time.sleep(2)
 
     ip = wlan.ifconfig()[0]
@@ -367,8 +402,11 @@ async def web_server():
     """Async HTTP server on port 80 using uasyncio stream API."""
 
     async def handle_client(reader, writer):
+        global web_traffic_until
         peer = writer.get_extra_info("peername")
         print(f"[WEB] Client connected from {peer}")
+        # Signal traffic — flicker onboard LED for ~800ms after last request
+        web_traffic_until = time.ticks_add(time.ticks_ms(), 800)
         try:
             request = await reader.read(1024)
             req_line = request.split(b"\r\n")[0].decode() if request else "(empty)"
@@ -377,6 +415,8 @@ async def web_server():
             response = build_page()
             writer.write(response)
             await writer.drain()
+            # Extend flicker window a bit past response
+            web_traffic_until = time.ticks_add(time.ticks_ms(), 800)
             print(f"[WEB] Response sent ({len(response)} bytes)")
         except Exception as e:
             print(f"[WEB] Client error: {e}")
@@ -411,6 +451,10 @@ async def main():
     )
 
 
+# Solid green at boot
+set_onboard(0, 255, 0, 0.3)
+print("Booting...")
+
 ip = wifi_connect()
 try:
     uasyncio.run(main())
@@ -419,4 +463,5 @@ except KeyboardInterrupt:
 finally:
     for i in range(NUM_LEDS):
         led_strip.set_rgb(i, 0, 0, 0)
+    onboard_off()
     print("Bye!")
