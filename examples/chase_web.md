@@ -91,6 +91,8 @@ The web UI is a single dark-themed responsive page that works on mobile and
 desktop. No internet connection required — everything is served directly from
 the board.
 
+![Plasma Chase web interface](chase_web_web.png)
+
 ### Controls
 
 | Control | Description |

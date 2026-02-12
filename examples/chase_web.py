@@ -32,6 +32,11 @@ SWATCHES = [
     "8800ff", "ff00ff", "ff1493", "ffffff", "ffaa55", "88ff00",
 ]
 
+# Pre‑compute squared fade factors for the trail (avoids per‑frame math)
+_TRAIL_FADES = tuple(
+    ((1.0 - t / (TRAIL_LENGTH + 1)) ** 2) for t in range(1, TRAIL_LENGTH + 1)
+)
+
 COLOR_SEQUENCE = [
     (255,   0,   0), (255, 136,   0), (255, 255,   0),
     (0,   255,   0), (0,   255, 255), (0,     0, 255),
@@ -190,50 +195,53 @@ def wifi_connect():
 
 def _draw_trail(head, r, g, b, base=None):
     """Render a fading trail behind *head*. *base* supplies painted colours."""
-    for t in range(1, TRAIL_LENGTH + 1):
-        idx  = (head - t) % NUM_LEDS
-        fade = 1.0 - t / (TRAIL_LENGTH + 1)
-        ff   = fade * fade
+    _set = led_strip.set_rgb          # cache method lookup
+    _dim = PAINT_DIM
+    for i, ff in enumerate(_TRAIL_FADES):
+        idx = (head - 1 - i) % NUM_LEDS
+        fr, fg, fb = int(r * ff), int(g * ff), int(b * ff)
         if base:
             pr, pg, pb = base[idx]
-            tr = max(int(pr * PAINT_DIM), int(r * ff))
-            tg = max(int(pg * PAINT_DIM), int(g * ff))
-            tb = max(int(pb * PAINT_DIM), int(b * ff))
-        else:
-            tr, tg, tb = int(r * ff), int(g * ff), int(b * ff)
-        led_strip.set_rgb(idx, tr, tg, tb)
+            fr = max(int(pr * _dim), fr)
+            fg = max(int(pg * _dim), fg)
+            fb = max(int(pb * _dim), fb)
+        _set(idx, fr, fg, fb)
 
 
 async def chase_loop():
     """Animate a single chaser with fading trail around the strip."""
     offset = 0
+    _set   = led_strip.set_rgb         # cache hot method lookups
+    _sleep = uasyncio.sleep
+    _n     = NUM_LEDS
+    _dim   = PAINT_DIM
+
     while True:
-        r, g, b = state.color
-        head = offset % NUM_LEDS
+        r, g, b = state.r, state.g, state.b
+        head = offset % _n
 
         if state.paint:
-            state.painted[head] = (r, g, b)
-            for i in range(NUM_LEDS):
-                pr, pg, pb = state.painted[i]
-                led_strip.set_rgb(i, int(pr * PAINT_DIM),
-                                     int(pg * PAINT_DIM),
-                                     int(pb * PAINT_DIM))
-            led_strip.set_rgb(head, r, g, b)
-            _draw_trail(head, r, g, b, base=state.painted)
+            painted = state.painted
+            painted[head] = (r, g, b)
+            for i in range(_n):
+                pr, pg, pb = painted[i]
+                _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
+            _set(head, r, g, b)
+            _draw_trail(head, r, g, b, base=painted)
         else:
-            for i in range(NUM_LEDS):
-                led_strip.set_rgb(i, 0, 0, 0)
-            led_strip.set_rgb(head, r, g, b)
+            for i in range(_n):
+                _set(i, 0, 0, 0)
+            _set(head, r, g, b)
             _draw_trail(head, r, g, b)
 
         onboard.update(r, g, b)
 
         if state.speed == 0:
-            await uasyncio.sleep(0.1)
+            await _sleep(0.1)
             continue
 
-        offset = (offset + 1) % NUM_LEDS
-        await uasyncio.sleep(max(0.01, 0.21 - state.speed * 0.002))
+        offset = (offset + 1) % _n
+        await _sleep(max(0.01, 0.21 - state.speed * 0.002))
 
 
 # ─── Button Handler ──────────────────────────────────────────────────────────
@@ -350,12 +358,19 @@ def build_page():
 
 # ─── Request Parser ──────────────────────────────────────────────────────────
 
+_RESP_204 = "HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n"
+
+
 def parse_request(raw):
-    """Apply query‑string parameters from raw HTTP request bytes."""
+    """Apply query‑string parameters from raw HTTP request bytes.
+
+    Returns True if parameters were found (caller can send a minimal 204
+    instead of the full page).
+    """
     try:
         line = raw.split(b"\r\n")[0].decode()
         if "?" not in line:
-            return
+            return False
         query = line.split("?")[1].split(" ")[0]
         for part in query.split("&"):
             key, val = part.split("=")
@@ -367,8 +382,10 @@ def parse_request(raw):
                 state.paint = val == "1"
                 if not state.paint:
                     state.clear_canvas()
+        return True
     except Exception as e:
         print(f"[WEB] Parse error: {e}")
+        return False
 
 
 # ─── Web Server ──────────────────────────────────────────────────────────────
@@ -383,8 +400,11 @@ async def web_server(wlan):
             if data:
                 path = data.split(b" ")[1].decode()
                 print(f"[WEB] {path}")
-                parse_request(data)
-            writer.write(build_page())
+                has_params = parse_request(data)
+            else:
+                has_params = False
+            # AJAX param updates get a tiny 204; full page only on first load
+            writer.write(_RESP_204 if has_params else build_page())
             await writer.drain()
             onboard.signal_traffic()
         except Exception as e:
