@@ -13,16 +13,35 @@ import plasma
 import network
 import socket
 import uasyncio
+from machine import Pin, PWM
 
 NUM_LEDS = 60
 TRAIL_LENGTH = 4  # number of fading trail LEDs behind each head
 
 # --- Global state (modified by web requests) ---
-speed = 50        # 1 (slow) to 100 (fast)
+speed = 25        # 0 (stop) to 100 (fast)
 color_r = 255     # current chase colour
 color_g = 0
 color_b = 0
 remember = False  # paint mode: LEDs keep their colour
+
+# Colour sequence for button cycling
+COLOR_SEQUENCE = [
+    (255,   0,   0),  # red
+    (255, 136,   0),  # orange
+    (255, 255,   0),  # yellow
+    (0,   255,   0),  # green
+    (0,   255, 255),  # cyan
+    (0,     0, 255),  # blue
+    (136,   0, 255),  # purple
+    (255,   0, 255),  # magenta
+    (255,  20, 147),  # pink
+    (255, 255, 255),  # white
+]
+color_index = 0
+
+# Button A on GPIO 12 (active low)
+button_a = Pin(12, Pin.IN, Pin.PULL_UP)
 
 # Store painted colour for each LED (used in paint mode)
 painted = [(0, 0, 0)] * NUM_LEDS
@@ -30,6 +49,21 @@ painted = [(0, 0, 0)] * NUM_LEDS
 # --- LED strip setup ---
 led_strip = plasma.WS2812(NUM_LEDS, color_order=plasma.COLOR_ORDER_BGR)
 led_strip.start()
+
+# Onboard RGB LED via PWM (active-low: duty 65535=off, 0=full on)
+# ~15% intensity to keep it subtle
+ONBOARD_DIM = 0.15
+onboard_r = PWM(Pin(16), freq=1000, duty_u16=65535)
+onboard_g = PWM(Pin(17), freq=1000, duty_u16=65535)
+onboard_b = PWM(Pin(18), freq=1000, duty_u16=65535)
+
+
+def update_onboard_led():
+    """Set onboard LED to current chase colour at reduced intensity."""
+    # Active-low: duty = 65535 means off, 0 means full on
+    onboard_r.duty_u16(65535 - int(color_r * ONBOARD_DIM * 257))
+    onboard_g.duty_u16(65535 - int(color_g * ONBOARD_DIM * 257))
+    onboard_b.duty_u16(65535 - int(color_b * ONBOARD_DIM * 257))
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +160,9 @@ async def chase_loop():
                 tb = int(color_b * fade * fade)
                 led_strip.set_rgb(trail_idx, tr, tg, tb)
 
+        # Update onboard LED to match current colour
+        update_onboard_led()
+
         # Speed 0 = paused, 1-100 maps ~200ms down to ~10ms
         if speed == 0:
             await uasyncio.sleep(0.1)
@@ -134,6 +171,57 @@ async def chase_loop():
         offset = (offset + 1) % NUM_LEDS
         delay = max(0.01, 0.21 - (speed * 0.002))
         await uasyncio.sleep(delay)
+
+
+# ---------------------------------------------------------------------------
+# Button A handler (async)
+# ---------------------------------------------------------------------------
+async def button_loop():
+    """Poll button A: short=next colour, double=stop, long=toggle paint."""
+    global color_r, color_g, color_b, color_index, remember, painted, speed
+    LONG_PRESS_MS = 600
+    DOUBLE_PRESS_MS = 300
+
+    while True:
+        if button_a.value() == 0:  # pressed (active low)
+            press_start = time.ticks_ms()
+            long_fired = False
+
+            # Wait for release, but fire long press while held
+            while button_a.value() == 0:
+                duration = time.ticks_diff(time.ticks_ms(), press_start)
+                if not long_fired and duration >= LONG_PRESS_MS:
+                    remember = not remember
+                    if not remember:
+                        painted = [(0, 0, 0)] * NUM_LEDS
+                    print(f"[BTN] Paint mode: {'ON' if remember else 'OFF'}")
+                    long_fired = True
+                await uasyncio.sleep_ms(20)
+
+            if not long_fired:
+                # Short press — wait to see if a second press follows
+                second_press = False
+                wait_start = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), wait_start) < DOUBLE_PRESS_MS:
+                    if button_a.value() == 0:
+                        second_press = True
+                        # Wait for second release
+                        while button_a.value() == 0:
+                            await uasyncio.sleep_ms(20)
+                        break
+                    await uasyncio.sleep_ms(20)
+
+                if second_press:
+                    # Double press: toggle stop/resume
+                    speed = 0 if speed > 0 else 25
+                    print(f"[BTN] Speed: {speed}")
+                else:
+                    # Single press: next colour
+                    color_index = (color_index + 1) % len(COLOR_SEQUENCE)
+                    color_r, color_g, color_b = COLOR_SEQUENCE[color_index]
+                    print(f"[BTN] Colour: ({color_r},{color_g},{color_b})")
+
+        await uasyncio.sleep_ms(50)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +407,7 @@ async def main():
     await uasyncio.gather(
         chase_loop(),
         web_server(),
+        button_loop(),
     )
 
 
