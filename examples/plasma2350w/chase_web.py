@@ -23,7 +23,7 @@ from machine import Pin, PWM
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-NUM_LEDS        = 60
+NUM_LEDS        = 66
 TRAIL_LENGTH    = 4       # fading trail behind the chaser head
 DEFAULT_SPEED   = 25      # 0 = paused, 1‑100
 ONBOARD_DIM     = 0.15    # onboard LED default brightness (0‑1)
