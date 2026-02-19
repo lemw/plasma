@@ -388,7 +388,7 @@ def parse_request(raw):
                 if not state.paint:
                     state.clear_canvas()
         return True
-    except Exception as e:
+    except (ValueError, IndexError, UnicodeDecodeError) as e:
         print(f"[WEB] Parse error: {e}")
         return False
 
@@ -412,7 +412,7 @@ async def web_server(wlan):
             writer.write(_RESP_204 if has_params else build_page())
             await writer.drain()
             onboard.signal_traffic()
-        except Exception as e:
+        except (OSError, ValueError, IndexError, UnicodeDecodeError) as e:
             print(f"[WEB] Error: {e}")
         finally:
             writer.close()

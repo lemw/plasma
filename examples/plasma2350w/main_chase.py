@@ -2,4 +2,4 @@
 # It will auto-run chase_web.py on every boot/reset.
 # Make sure chase_web.py and secrets.py are also on the board.
 
-import chase_web
+import chase_web  # noqa: F401, imported for its side effects
