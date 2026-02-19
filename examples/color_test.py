@@ -5,7 +5,6 @@
 Press Enter in the REPL to advance to the next colour.
 Report back what you actually see for each one!
 """
-import time
 import plasma
 
 NUM_LEDS = 50

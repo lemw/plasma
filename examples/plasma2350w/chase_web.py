@@ -220,24 +220,33 @@ async def chase_loop():
     _sleep = uasyncio.sleep
     _n     = NUM_LEDS
     _dim   = PAINT_DIM
+    prev_snapshot = None               # (head, r, g, b, paint) — skip redraws when unchanged
 
     while True:
         r, g, b = state.r, state.g, state.b
         head = offset % _n
 
-        if state.paint:
-            painted = state.painted
-            painted[head] = (r, g, b)
-            for i in range(_n):
-                pr, pg, pb = painted[i]
-                _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
-            _set(head, r, g, b)
-            _draw_trail(head, r, g, b, base=painted)
-        else:
-            for i in range(_n):
-                _set(i, 0, 0, 0)
-            _set(head, r, g, b)
-            _draw_trail(head, r, g, b)
+        # Only push a new frame when something actually changed.
+        # Without this guard the strip is blanked and redrawn every
+        # iteration — even while paused — which briefly drives the head
+        # LED to black before restoring it, causing visible flicker.
+        snapshot = (head, r, g, b, state.paint)
+        if snapshot != prev_snapshot:
+            prev_snapshot = snapshot
+
+            if state.paint:
+                painted = state.painted
+                painted[head] = (r, g, b)
+                for i in range(_n):
+                    pr, pg, pb = painted[i]
+                    _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
+                _set(head, r, g, b)
+                _draw_trail(head, r, g, b, base=painted)
+            else:
+                for i in range(_n):
+                    _set(i, 0, 0, 0)
+                _set(head, r, g, b)
+                _draw_trail(head, r, g, b)
 
         onboard.update(r, g, b)
 
@@ -388,7 +397,7 @@ def parse_request(raw):
                 if not state.paint:
                     state.clear_canvas()
         return True
-    except Exception as e:
+    except (ValueError, IndexError, UnicodeError) as e:
         print(f"[WEB] Parse error: {e}")
         return False
 
@@ -412,7 +421,7 @@ async def web_server(wlan):
             writer.write(_RESP_204 if has_params else build_page())
             await writer.drain()
             onboard.signal_traffic()
-        except Exception as e:
+        except OSError as e:
             print(f"[WEB] Error: {e}")
         finally:
             writer.close()
