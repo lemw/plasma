@@ -15,6 +15,7 @@ Upload this file alongside secrets.py to the board and run it,
 or save a main.py that does ``import chase_web``.
 """
 
+import json
 import time
 import plasma
 import network
@@ -252,7 +253,7 @@ async def chase_loop():
                     _draw_trail(head, r, g, b)
 
             onboard.update(r, g, b)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"[LED] Frame error: {e}")
             await _sleep(0.1)
             continue
@@ -392,7 +393,10 @@ _RESP_204 = "HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n"
 
 def _build_state_json():
     """Return a minimal JSON response with current chase state."""
-    body = '{"color":"' + state.hex + '","speed":' + str(state.speed) + ',"paint":' + ('true' if state.paint else 'false') + '}'
+    body = json.dumps(
+        {"color": state.hex, "speed": state.speed, "paint": state.paint},
+        separators=(",", ":"),
+    )
     return (
         "HTTP/1.0 200 OK\r\n"
         "Content-Type: application/json\r\n"
