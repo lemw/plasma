@@ -201,17 +201,16 @@ def wifi_connect():
 # ─── Chase Animation ─────────────────────────────────────────────────────────
 
 def _draw_trail(head, r, g, b, base=None):
-    """Render a fading trail behind *head*. *base* supplies painted colours."""
+    """Render a fading trail behind *head*. *base* supplies pre‑dimmed colours."""
     _set = led_strip.set_rgb          # cache method lookup
-    _dim = PAINT_DIM
     for i, ff in enumerate(_TRAIL_FADES):
         idx = (head - 1 - i) % NUM_LEDS
         fr, fg, fb = int(r * ff), int(g * ff), int(b * ff)
         if base:
             pr, pg, pb = base[idx]
-            fr = max(int(pr * _dim), fr)
-            fg = max(int(pg * _dim), fg)
-            fb = max(int(pb * _dim), fb)
+            fr = max(pr, fr)
+            fg = max(pg, fg)
+            fb = max(pb, fb)
         _set(idx, fr, fg, fb)
 
 
@@ -239,10 +238,9 @@ async def chase_loop():
 
                 if state.paint:
                     painted = state.painted
-                    painted[head] = (r, g, b)
+                    painted[head] = (int(r * _dim), int(g * _dim), int(b * _dim))
                     for i in range(_n):
-                        pr, pg, pb = painted[i]
-                        _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
+                        _set(i, *painted[i])
                     _set(head, r, g, b)
                     _draw_trail(head, r, g, b, base=painted)
                 else:
