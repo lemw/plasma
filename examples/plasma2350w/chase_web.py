@@ -418,6 +418,11 @@ async def web_server(wlan):
             if data:
                 path = data.split(b" ")[1].decode()
                 print(f"[WEB] {path}")
+                # Browsers always request favicon — skip the heavy page render
+                if path == "/favicon.ico":
+                    writer.write(_RESP_204)
+                    await writer.drain()
+                    return
                 has_params = parse_request(data)
             else:
                 has_params = False
