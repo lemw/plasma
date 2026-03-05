@@ -361,6 +361,7 @@ document.getElementById('color').addEventListener('input',e=>c(e.target.value.su
 const sl=document.getElementById('speed'),sv=document.getElementById('sval');
 sl.addEventListener('input',e=>{{sv.textContent=e.target.value;sendS(e.target.value)}});
 document.getElementById('rem').addEventListener('change',e=>send('remember='+(e.target.checked?'1':'0')));
+setInterval(()=>fetch('/state').then(r=>r.json()).then(d=>{{document.getElementById('color').value=d.color;sl.value=d.speed;sv.textContent=d.speed;document.getElementById('rem').checked=d.paint}}).catch(()=>{{}}),2000);
 </script></body></html>"""
 
 
@@ -377,6 +378,18 @@ def build_page():
 # ─── Request Parser ──────────────────────────────────────────────────────────
 
 _RESP_204 = "HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n"
+
+
+def _build_state_json():
+    """Return a minimal JSON response with current chase state."""
+    body = '{"color":"' + state.hex + '","speed":' + str(state.speed) + ',"paint":' + ('true' if state.paint else 'false') + '}'
+    return (
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + str(len(body)) + "\r\n"
+        "\r\n" + body
+    )
 
 
 def parse_request(raw):
@@ -421,6 +434,10 @@ async def web_server(wlan):
                 # Browsers always request favicon — skip the heavy page render
                 if path == "/favicon.ico":
                     writer.write(_RESP_204)
+                    await writer.drain()
+                    return
+                if path == "/state":
+                    writer.write(_build_state_json())
                     await writer.drain()
                     return
                 has_params = parse_request(data)
