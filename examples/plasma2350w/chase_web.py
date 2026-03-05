@@ -31,6 +31,8 @@ PAINT_DIM       = 0.4     # painted LEDs shown at 40 %
 TRAFFIC_MS      = 800     # how long the onboard LED flickers after a request
 LONG_PRESS_MS   = 600
 DOUBLE_PRESS_MS = 300
+MIN_DELAY       = 0.01    # fastest chase step (seconds)
+MAX_DELAY       = 0.21    # slowest chase step (seconds)
 
 SWATCHES = [
     "ff0000", "ff8800", "ffff00", "00ff00", "00ffff", "0000ff",
@@ -119,6 +121,8 @@ class ChaseState:
     def set_hex(self, h):
         """Set colour from a hex string like ``ff8800``."""
         h = h.lstrip("#")
+        if len(h) != 6:
+            return
         self.r = int(h[0:2], 16)
         self.g = int(h[2:4], 16)
         self.b = int(h[4:6], 16)
@@ -199,17 +203,16 @@ def wifi_connect():
 # ─── Chase Animation ─────────────────────────────────────────────────────────
 
 def _draw_trail(head, r, g, b, base=None):
-    """Render a fading trail behind *head*. *base* supplies painted colours."""
+    """Render a fading trail behind *head*. *base* supplies pre‑dimmed colours."""
     _set = led_strip.set_rgb          # cache method lookup
-    _dim = PAINT_DIM
     for i, ff in enumerate(_TRAIL_FADES):
         idx = (head - 1 - i) % NUM_LEDS
         fr, fg, fb = int(r * ff), int(g * ff), int(b * ff)
         if base:
             pr, pg, pb = base[idx]
-            fr = max(int(pr * _dim), fr)
-            fg = max(int(pg * _dim), fg)
-            fb = max(int(pb * _dim), fb)
+            fr = max(pr, fr)
+            fg = max(pg, fg)
+            fb = max(pb, fb)
         _set(idx, fr, fg, fb)
 
 
@@ -223,39 +226,43 @@ async def chase_loop():
     prev_snapshot = None               # (head, r, g, b, paint) — skip redraws when unchanged
 
     while True:
-        r, g, b = state.r, state.g, state.b
-        head = offset % _n
+        try:
+            r, g, b = state.r, state.g, state.b
+            head = offset % _n
 
-        # Only push a new frame when something actually changed.
-        # Without this guard the strip is blanked and redrawn every
-        # iteration — even while paused — which briefly drives the head
-        # LED to black before restoring it, causing visible flicker.
-        snapshot = (head, r, g, b, state.paint)
-        if snapshot != prev_snapshot:
-            prev_snapshot = snapshot
+            # Only push a new frame when something actually changed.
+            # Without this guard the strip is blanked and redrawn every
+            # iteration — even while paused — which briefly drives the head
+            # LED to black before restoring it, causing visible flicker.
+            snapshot = (head, r, g, b, state.paint)
+            if snapshot != prev_snapshot:
+                prev_snapshot = snapshot
 
-            if state.paint:
-                painted = state.painted
-                painted[head] = (r, g, b)
-                for i in range(_n):
-                    pr, pg, pb = painted[i]
-                    _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
-                _set(head, r, g, b)
-                _draw_trail(head, r, g, b, base=painted)
-            else:
-                for i in range(_n):
-                    _set(i, 0, 0, 0)
-                _set(head, r, g, b)
-                _draw_trail(head, r, g, b)
+                if state.paint:
+                    painted = state.painted
+                    painted[head] = (int(r * _dim), int(g * _dim), int(b * _dim))
+                    for i in range(_n):
+                        _set(i, *painted[i])
+                    _set(head, r, g, b)
+                    _draw_trail(head, r, g, b, base=painted)
+                else:
+                    for i in range(_n):
+                        _set(i, 0, 0, 0)
+                    _set(head, r, g, b)
+                    _draw_trail(head, r, g, b)
 
-        onboard.update(r, g, b)
+            onboard.update(r, g, b)
+        except Exception as e:
+            print(f"[LED] Frame error: {e}")
+            await _sleep(0.1)
+            continue
 
         if state.speed == 0:
             await _sleep(0.1)
             continue
 
         offset = (offset + 1) % _n
-        await _sleep(max(0.01, 0.21 - state.speed * 0.002))
+        await _sleep(max(MIN_DELAY, MAX_DELAY - state.speed * 0.002))
 
 
 # ─── Button Handler ──────────────────────────────────────────────────────────
@@ -304,11 +311,7 @@ _SWATCH_HTML = "".join(
     for h in SWATCHES
 )
 
-_PAGE = """\
-HTTP/1.0 200 OK\r
-Content-Type: text/html\r
-Connection: close\r
-\r
+_PAGE_BODY = """\
 <!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Plasma Chase</title>
@@ -352,27 +355,51 @@ input[type=range]{{width:100%;accent-color:#e94560}}
 </div>
 <script>
 function send(p){{fetch('/?'+p).catch(()=>{{}})}}
-function c(h){{send('color='+h);document.getElementById('color').value='#'+h}}
+let _ct=0,_st=0;
+function throttled(fn,ms){{return function(){{const a=arguments,now=Date.now();clearTimeout(_st);if(now-_ct>=ms){{_ct=now;fn.apply(null,a)}}else{{_st=setTimeout(()=>{{_ct=Date.now();fn.apply(null,a)}},ms-(now-_ct))}}}}}}
+const sendC=throttled(h=>send('color='+h),80);
+const sendS=throttled(v=>send('speed='+v),80);
+function c(h){{sendC(h);document.getElementById('color').value='#'+h}}
 document.getElementById('color').addEventListener('input',e=>c(e.target.value.substring(1)));
 const sl=document.getElementById('speed'),sv=document.getElementById('sval');
-sl.addEventListener('input',e=>{{sv.textContent=e.target.value;send('speed='+e.target.value)}});
+sl.addEventListener('input',e=>{{sv.textContent=e.target.value;sendS(e.target.value)}});
 document.getElementById('rem').addEventListener('change',e=>send('remember='+(e.target.checked?'1':'0')));
+setInterval(()=>fetch('/state').then(r=>r.json()).then(d=>{{document.getElementById('color').value=d.color;sl.value=d.speed;sv.textContent=d.speed;document.getElementById('rem').checked=d.paint}}).catch(()=>{{}}),2000);
 </script></body></html>"""
 
 
 def build_page():
     """Render the control page with current state baked in."""
-    return _PAGE.format(
+    body = _PAGE_BODY.format(
         swatches=_SWATCH_HTML,
         hex=state.hex,
         speed=state.speed,
         checked="checked" if state.paint else "",
+    )
+    return (
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + str(len(body)) + "\r\n"
+        "\r\n" + body
     )
 
 
 # ─── Request Parser ──────────────────────────────────────────────────────────
 
 _RESP_204 = "HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n"
+
+
+def _build_state_json():
+    """Return a minimal JSON response with current chase state."""
+    body = '{"color":"' + state.hex + '","speed":' + str(state.speed) + ',"paint":' + ('true' if state.paint else 'false') + '}'
+    return (
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + str(len(body)) + "\r\n"
+        "\r\n" + body
+    )
 
 
 def parse_request(raw):
@@ -414,6 +441,15 @@ async def web_server(wlan):
             if data:
                 path = data.split(b" ")[1].decode()
                 print(f"[WEB] {path}")
+                # Browsers always request favicon — skip the heavy page render
+                if path == "/favicon.ico":
+                    writer.write(_RESP_204)
+                    await writer.drain()
+                    return
+                if path == "/state":
+                    writer.write(_build_state_json())
+                    await writer.drain()
+                    return
                 has_params = parse_request(data)
             else:
                 has_params = False

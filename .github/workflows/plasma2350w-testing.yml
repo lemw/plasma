@@ -1,0 +1,190 @@
+name: Plasma 2350W Testing
+
+on:
+  push:
+    branches: [ main, claude-opus, gpt-suggestions ]
+    paths:
+      - 'examples/plasma2350w/**'
+      - 'tests/**'
+      - '.github/workflows/plasma2350w-testing.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'examples/plasma2350w/**'
+      - 'tests/**'
+
+jobs:
+  lint:
+    name: Lint Plasma 2350W Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Linting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+      
+      - name: Lint chase_web.py
+        run: |
+          ruff check --select "F,Q,W,E,B,COM,BLE,C4,ISC,ICN,PIE,RSE,RET,SLF,ARG" \
+            examples/plasma2350w/ --ignore "E501,E402,COM812"
+      
+      - name: Check Code Formatting
+        run: |
+          ruff format --check examples/plasma2350w/
+
+  unit-tests:
+    name: Unit Tests (Mocked Hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+      
+      - name: Run Unit Tests
+        run: |
+          python -m pytest tests/test_chase_web.py -v --tb=short
+      
+      - name: Run Tests with Coverage
+        run: |
+          python -m pytest tests/test_chase_web.py --cov=examples/plasma2350w --cov-report=term-missing
+
+  integration-tests:
+    name: Integration Tests (HTTP Server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+      
+      - name: Run Integration Tests
+        run: |
+          python -m pytest tests/test_chase_web_integration.py -v --tb=short
+      
+      - name: Test All Endpoints
+        run: |
+          python -m pytest tests/test_chase_web_integration.py::TestWebServerIntegration -v
+
+  syntax-check:
+    name: MicroPython Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Check Python Syntax
+        run: |
+          python -m py_compile examples/plasma2350w/chase_web.py
+      
+      - name: Verify No Syntax Errors
+        run: |
+          python -c "import ast; ast.parse(open('examples/plasma2350w/chase_web.py').read())"
+
+  functional-verification:
+    name: Functional Verification (Simulated RP2350W)
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, integration-tests]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-test.txt
+      
+      - name: Run All Tests
+        run: |
+          python -m pytest tests/ -v --tb=short
+      
+      - name: Generate Test Report
+        if: always()
+        run: |
+          python -m pytest tests/ --junit-xml=test-results.xml
+      
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Analysis Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff radon
+      
+      - name: Check Cyclomatic Complexity
+        run: |
+          radon cc examples/plasma2350w/chase_web.py -a -nb
+      
+      - name: Check Maintainability Index
+        run: |
+          radon mi examples/plasma2350w/chase_web.py -nb
+      
+      - name: Security Check
+        run: |
+          ruff check --select "S" examples/plasma2350w/ || true
+
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, integration-tests, syntax-check, functional-verification, code-quality]
+    if: always()
+    steps:
+      - name: Check Results
+        run: |
+          echo "✅ All Plasma 2350W tests completed"
+          echo "Linting: ${{ needs.lint.result }}"
+          echo "Unit Tests: ${{ needs.unit-tests.result }}"
+          echo "Integration Tests: ${{ needs.integration-tests.result }}"
+          echo "Syntax Check: ${{ needs.syntax-check.result }}"
+          echo "Functional Verification: ${{ needs.functional-verification.result }}"
+          echo "Code Quality: ${{ needs.code-quality.result }}"
