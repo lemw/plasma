@@ -119,6 +119,8 @@ class ChaseState:
     def set_hex(self, h):
         """Set colour from a hex string like ``ff8800``."""
         h = h.lstrip("#")
+        if len(h) != 6:
+            return
         self.r = int(h[0:2], 16)
         self.g = int(h[2:4], 16)
         self.b = int(h[4:6], 16)
