@@ -225,32 +225,37 @@ async def chase_loop():
     prev_snapshot = None               # (head, r, g, b, paint) — skip redraws when unchanged
 
     while True:
-        r, g, b = state.r, state.g, state.b
-        head = offset % _n
+        try:
+            r, g, b = state.r, state.g, state.b
+            head = offset % _n
 
-        # Only push a new frame when something actually changed.
-        # Without this guard the strip is blanked and redrawn every
-        # iteration — even while paused — which briefly drives the head
-        # LED to black before restoring it, causing visible flicker.
-        snapshot = (head, r, g, b, state.paint)
-        if snapshot != prev_snapshot:
-            prev_snapshot = snapshot
+            # Only push a new frame when something actually changed.
+            # Without this guard the strip is blanked and redrawn every
+            # iteration — even while paused — which briefly drives the head
+            # LED to black before restoring it, causing visible flicker.
+            snapshot = (head, r, g, b, state.paint)
+            if snapshot != prev_snapshot:
+                prev_snapshot = snapshot
 
-            if state.paint:
-                painted = state.painted
-                painted[head] = (r, g, b)
-                for i in range(_n):
-                    pr, pg, pb = painted[i]
-                    _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
-                _set(head, r, g, b)
-                _draw_trail(head, r, g, b, base=painted)
-            else:
-                for i in range(_n):
-                    _set(i, 0, 0, 0)
-                _set(head, r, g, b)
-                _draw_trail(head, r, g, b)
+                if state.paint:
+                    painted = state.painted
+                    painted[head] = (r, g, b)
+                    for i in range(_n):
+                        pr, pg, pb = painted[i]
+                        _set(i, int(pr * _dim), int(pg * _dim), int(pb * _dim))
+                    _set(head, r, g, b)
+                    _draw_trail(head, r, g, b, base=painted)
+                else:
+                    for i in range(_n):
+                        _set(i, 0, 0, 0)
+                    _set(head, r, g, b)
+                    _draw_trail(head, r, g, b)
 
-        onboard.update(r, g, b)
+            onboard.update(r, g, b)
+        except Exception as e:
+            print(f"[LED] Frame error: {e}")
+            await _sleep(0.1)
+            continue
 
         if state.speed == 0:
             await _sleep(0.1)
