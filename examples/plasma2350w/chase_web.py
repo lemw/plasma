@@ -352,10 +352,14 @@ input[type=range]{{width:100%;accent-color:#e94560}}
 </div>
 <script>
 function send(p){{fetch('/?'+p).catch(()=>{{}})}}
-function c(h){{send('color='+h);document.getElementById('color').value='#'+h}}
+let _ct=0,_st=0;
+function throttled(fn,ms){{return function(){{const a=arguments,now=Date.now();clearTimeout(_st);if(now-_ct>=ms){{_ct=now;fn.apply(null,a)}}else{{_st=setTimeout(()=>{{_ct=Date.now();fn.apply(null,a)}},ms-(now-_ct))}}}}}}
+const sendC=throttled(h=>send('color='+h),80);
+const sendS=throttled(v=>send('speed='+v),80);
+function c(h){{sendC(h);document.getElementById('color').value='#'+h}}
 document.getElementById('color').addEventListener('input',e=>c(e.target.value.substring(1)));
 const sl=document.getElementById('speed'),sv=document.getElementById('sval');
-sl.addEventListener('input',e=>{{sv.textContent=e.target.value;send('speed='+e.target.value)}});
+sl.addEventListener('input',e=>{{sv.textContent=e.target.value;sendS(e.target.value)}});
 document.getElementById('rem').addEventListener('change',e=>send('remember='+(e.target.checked?'1':'0')));
 </script></body></html>"""
 
