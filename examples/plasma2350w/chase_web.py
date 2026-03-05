@@ -31,6 +31,8 @@ PAINT_DIM       = 0.4     # painted LEDs shown at 40 %
 TRAFFIC_MS      = 800     # how long the onboard LED flickers after a request
 LONG_PRESS_MS   = 600
 DOUBLE_PRESS_MS = 300
+MIN_DELAY       = 0.01    # fastest chase step (seconds)
+MAX_DELAY       = 0.21    # slowest chase step (seconds)
 
 SWATCHES = [
     "ff0000", "ff8800", "ffff00", "00ff00", "00ffff", "0000ff",
@@ -260,7 +262,7 @@ async def chase_loop():
             continue
 
         offset = (offset + 1) % _n
-        await _sleep(max(0.01, 0.21 - state.speed * 0.002))
+        await _sleep(max(MIN_DELAY, MAX_DELAY - state.speed * 0.002))
 
 
 # ─── Button Handler ──────────────────────────────────────────────────────────
