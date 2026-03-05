@@ -1,0 +1,70 @@
+name: CI
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# Runs on every push and pull-request so code quality and simulation tests
+# are verified for each check-in.
+
+on:
+  push:
+  pull_request:
+
+# Restrict the GITHUB_TOKEN to the minimum required for every job.
+permissions:
+  contents: read
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+
+jobs:
+
+  # ── 1. Python linting (all examples + modules) ──────────────────────────────
+  # Reuses the standalone python-linting workflow — no duplication.
+  # continue-on-error lets the HIL simulation run even when there is
+  # pre-existing lint debt in the repository.
+  lint:
+    name: Lint
+    uses: ./.github/workflows/python-linting.yml
+    continue-on-error: true
+
+  # ── 2. Simulated HIL test — one entry per WiFi-capable board ────────────────
+  # The matrix makes it straightforward to add further boards later; each row
+  # declares the board name, where its examples live, and which module to run.
+  # Currently focused on plasma_2350_w — the only board with an async web
+  # server that can be exercised from the host side.
+  hil-sim:
+    name: "HIL Sim — ${{ matrix.board }}"
+    runs-on: ubuntu-latest
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: plasma_2350_w
+            examples_dir: examples/plasma2350w
+            entry_module: chase_web
+
+    env:
+      HIL_BOARD: ${{ matrix.board }}
+      HIL_EXAMPLES_DIR: ${{ matrix.examples_dir }}
+      HIL_ENTRY: ${{ matrix.entry_module }}
+      WEB_TEST_PORT: "8080"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install HIL test dependencies
+        run: |
+          source ci/hil_sim.sh
+          hil_prepare
+
+      - name: "HIL Sim: run tests"
+        shell: bash
+        run: |
+          source ci/hil_sim.sh
+          hil_run_tests "$HIL_BOARD"
