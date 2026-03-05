@@ -45,3 +45,10 @@ venv
 
 # Secrets
 secrets.py
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Pytest cache
+.pytest_cache/
