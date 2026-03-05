@@ -306,11 +306,7 @@ _SWATCH_HTML = "".join(
     for h in SWATCHES
 )
 
-_PAGE = """\
-HTTP/1.0 200 OK\r
-Content-Type: text/html\r
-Connection: close\r
-\r
+_PAGE_BODY = """\
 <!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Plasma Chase</title>
@@ -369,11 +365,18 @@ setInterval(()=>fetch('/state').then(r=>r.json()).then(d=>{{document.getElementB
 
 def build_page():
     """Render the control page with current state baked in."""
-    return _PAGE.format(
+    body = _PAGE_BODY.format(
         swatches=_SWATCH_HTML,
         hex=state.hex,
         speed=state.speed,
         checked="checked" if state.paint else "",
+    )
+    return (
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "Content-Length: " + str(len(body)) + "\r\n"
+        "\r\n" + body
     )
 
 
